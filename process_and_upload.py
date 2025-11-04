@@ -6,11 +6,10 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 from datetime import timedelta
 import pandas as pd
-from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 import random
-import json
+from google.oauth2.credentials import Credentials as UserCreds
 
 # ================== ENV / CREDS ==================
 def _req(name: str) -> str:
@@ -19,23 +18,33 @@ def _req(name: str) -> str:
         raise RuntimeError(f"Missing required env var: {name}")
     return v
 
-SA_JSON_RAW      = _req("GOOGLE_SERVICE_ACCOUNT_JSON")
-DRIVE_FOLDER_ID  = _req("DRIVE_FOLDER_ID")
-SCOPES = ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/drive.file"]
-CREDS  = Credentials.from_service_account_info(json.loads(SA_JSON_RAW), scopes=SCOPES)
+DRIVE_FOLDER_ID = _req("DRIVE_FOLDER_ID")
+
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 def drive_client():
-    return build("drive", "v3", credentials=CREDS)
+    rtok = os.getenv("GDRIVE_REFRESH_TOKEN")
+    if not rtok:
+        raise RuntimeError("Missing GDRIVE_REFRESH_TOKEN (add it as a GitHub Secret).")
+    creds = UserCreds(
+        token=None,
+        refresh_token=rtok,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=os.getenv("GDRIVE_CLIENT_ID"),
+        client_secret=os.getenv("GDRIVE_CLIENT_SECRET"),
+        scopes=SCOPES,
+    )
+    return build("drive", "v3", credentials=creds)
 
 def drive_create_subfolder(drive, parent_id: str, name: str) -> str:
     meta = {"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]}
-    return drive.files().create(body=meta, fields="id").execute()["id"]
+    return drive.files().create(body=meta, fields="id", supportsAllDrives=True).execute()["id"]
 
 def drive_upload_csv(drive, folder_id: str, path: Path) -> str:
     meta  = {"name": path.name, "parents": [folder_id]}
-    media = MediaFileUpload(str(path), mimetype="text/csv", resumable=True)
-    return drive.files().create(body=meta, media_body=media, fields="id").execute()["id"]
-
+    media = MediaFileUpload(str(path), mimetype="text/csv", resumable=False)
+    return drive.files().create(body=meta, media_body=media, fields="id", supportsAllDrives=True).execute()["id"]
+    
 # ================== CONFIG YOU EDIT ==================
 # 1) Row-level filters: all conditions must pass.
 #    Supported ops: eq, ne, in, nin, contains, regex, notnull, null (case-insensitive on strings)
@@ -87,103 +96,51 @@ def _ensure_dir(p: Path):
     p.mkdir(parents=True, exist_ok=True)
 
 def _discover_run_id() -> str:
-    """Find RUN_ID from env, a last_run_id.txt, or the newest manifest in any supported layout."""
     rid = os.getenv("RUN_ID", "").strip()
     if rid:
         return rid
+    last = Path("output/last_run_id.txt")
+    if last.exists():
+        t = last.read_text().strip()
+        if t:
+            return t
+    # fallback to most recent manifest
+    manis = sorted(Path("output/raw").glob("manifest_*.json"), reverse=True)
+    if manis:
+        m = json.loads(manis[0].read_text())
+        return m.get("run_id") or manis[0].stem.replace("manifest_", "")
+    raise RuntimeError("Cannot determine RUN_ID. Provide RUN_ID env or ensure output/last_run_id.txt exists.")
 
-    # 1) last_run_id.txt in output/ or any run-*/ folder
-    try:
-        return Path(_find_last_run_id_path()).read_text().strip()
-    except FileNotFoundError:
-        pass
-
-    # 2) newest manifest in any of these bases
-    patterns = [
-        "output/run-*/raw/manifest_*.json",
-        "run-*/raw/manifest_*.json",
-        "output/raw/manifest_*.json",
-        "raw/manifest_*.json",
-    ]
-    cands = []
-    for pat in patterns:
-        cands.extend(Path(".").glob(pat))
-    if cands:
-        latest = max(cands, key=lambda p: p.stat().st_mtime)
-        try:
-            m = json.loads(latest.read_text())
-            return m.get("run_id") or latest.stem.replace("manifest_", "")
-        except Exception:
-            return latest.stem.replace("manifest_", "")
-
-    raise RuntimeError(
-        "Cannot determine RUN_ID. Set RUN_ID env var, provide output/last_run_id.txt, "
-        "or ensure a manifest_* exists under output/run-*/raw or run-*/raw."
-    )
 def _find_raw_csv(run_id: str) -> Path:
-    """
-    Find the raw CSV for a given run_id across multiple supported layouts.
+    # 1) try manifest for this run_id
+    mani = Path(f"output/raw/manifest_{run_id}.json")
+    if mani.exists():
+        try:
+            p = Path(json.loads(mani.read_text()).get("saved_csv", ""))
+            if p.exists():
+                return p
+        except Exception:
+            pass
 
-    Supported directories (first match wins):
-      1) output/run-<run_id>/raw/
-      2) output/raw/
-      3) run-<run_id>/raw/
-      4) raw/
-    """
-    # Search bases in priority order
-    bases = [
-        Path(f"output/run-{run_id}/raw"),
-        Path("output/raw"),
-        Path(f"run-{run_id}/raw"),
-        Path("raw"),
-    ]
+    # 2) try canonical filename pattern
+    p = Path(f"output/raw/export_{run_id}.csv")
+    if p.exists():
+        return p
 
-    # Try manifest, then canonical name, then any *run_id* csv, then newest csv in each base
-    for base in bases:
-        if not base.exists():
-            continue
+    # 3) try any csv that contains the run_id
+    cands = sorted(Path("output/raw").glob(f"*{run_id}*.csv"), reverse=True)
+    if cands:
+        return cands[0]
 
-        # 1) manifest
-        mani = base / f"manifest_{run_id}.json"
-        if mani.exists():
-            try:
-                saved = json.loads(mani.read_text()).get("saved_csv", "")
-                p = Path(saved)
-                if p.is_file():
-                    return p
-                # If manifest only contains filename, assume it's relative to base
-                if saved and (base / saved).is_file():
-                    return base / saved
-            except Exception:
-                pass
+    # 4) graceful fallback: newest CSV in output/raw
+    any_csvs = sorted(Path("output/raw").glob("*.csv"), key=lambda x: x.stat().st_mtime, reverse=True)
+    if any_csvs:
+        print(f"[warn] No exact match for run_id={run_id}; using newest CSV: {any_csvs[0].name}")
+        return any_csvs[0]
 
-        # 2) canonical filename
-        p = base / f"export_{run_id}.csv"
-        if p.is_file():
-            return p
+    raise FileNotFoundError(f"No raw CSV found for run_id={run_id} and no CSVs exist in output/raw")
 
-        # 3) any csv containing the run_id
-        cands = sorted(base.glob(f"*{run_id}*.csv"))
-        if cands:
-            return cands[0]
 
-        # 4) newest CSV in this base
-        any_csvs = sorted(base.glob("*.csv"), key=lambda x: x.stat().st_mtime, reverse=True)
-        if any_csvs:
-            print(f"[warn] No exact match for run_id={run_id} in {base}; using newest: {any_csvs[0].name}")
-            return any_csvs[0]
-
-    raise FileNotFoundError(
-        f"No raw CSV found for run_id={run_id} in any of: " + ", ".join(str(b) for b in bases)
-    )
-
-def _find_last_run_id_path() -> Path:
-    candidates = [Path("output/last_run_id.txt")] + list(Path(".").glob("run-*/last_run_id.txt"))
-    for p in candidates:
-        if p.exists():
-            return p
-    raise FileNotFoundError("last_run_id.txt not found in output/ or run-*/")
-    
 def _normalize_str(x: Any) -> str:
     return str(x).strip()
 
