@@ -2,8 +2,6 @@ name: ARMS export → process → Drive
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]   # run on every commit to main
   schedule:
     - cron: "0 14 * * 1-5"  # 10:00 ET weekdays
 
@@ -17,7 +15,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install deps
         run: |
@@ -55,18 +53,13 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Download raw artifact from fetch
         uses: actions/download-artifact@v4
         with:
           name: run-${{ needs.fetch.outputs.run_id }}
-          path: .   # restores output/raw/* and output/last_run_id.txt
-
-      - name: Show workspace (debug)
-        run: |
-          pwd
-          ls -R
+          path: .   # restores output/raw/* and output/last_run_id.txt into the workspace
 
       - name: Install deps
         run: pip install pandas google-api-python-client google-auth
@@ -77,61 +70,3 @@ jobs:
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           RUN_ID: ${{ needs.fetch.outputs.run_id }}
         run: python process_and_upload.py
-
-      # 🔍 Diagnostic: verify where files were uploaded in Drive
-      - name: Verify Drive location & list recent items
-        env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
-          RUN_ID: ${{ needs.fetch.outputs.run_id }}
-        run: |
-          python - <<'PY'
-          import os, json, datetime as dt
-          from google.oauth2.service_account import Credentials
-          from googleapiclient.discovery import build
-
-          SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
-          creds = Credentials.from_service_account_info(
-              json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]),
-              scopes=SCOPES
-          )
-          drv = build("drive","v3", credentials=creds)
-
-          parent_id = os.environ["DRIVE_FOLDER_ID"]
-          run_id = os.environ.get("RUN_ID","")
-
-          def jprint(label, obj):
-              import json as _j
-              print(f"\n[{label}]")
-              print(_j.dumps(obj, indent=2))
-
-          # 1) Show the configured parent folder
-          parent = drv.files().get(
-              fileId=parent_id,
-              fields="id,name,mimeType,webViewLink,parents"
-          ).execute()
-          jprint("Parent folder", parent)
-
-          # 2) List direct children (should see date folders like YYYY-MM-DD)
-          children = drv.files().list(
-              q=f"'{parent_id}' in parents and trashed=false",
-              fields="files(id,name,mimeType,webViewLink,modifiedTime,parents)"
-          ).execute().get("files", [])
-          jprint("Direct children of parent", children)
-
-          # 3) Look for this run’s folder anywhere
-          if run_id:
-              hits = drv.files().list(
-                  q=f"name = 'run_{run_id}' and trashed=false",
-                  fields="files(id,name,mimeType,webViewLink,parents)"
-              ).execute().get("files", [])
-              jprint(f"Search results for run_{run_id}", hits)
-
-              # 4) Recent CSVs anywhere (last 12 hours)
-              iso_since = (dt.datetime.utcnow() - dt.timedelta(hours=12)).isoformat()+"Z"
-              csvs = drv.files().list(
-                  q=f"modifiedTime > '{iso_since}' and name contains '.csv' and trashed=false",
-                  fields="files(id,name,webViewLink,parents,mimeType,modifiedTime)"
-              ).execute().get("files", [])
-              jprint("Recent CSVs (last 12h, anywhere)", csvs)
-          PY
