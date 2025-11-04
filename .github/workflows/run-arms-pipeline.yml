@@ -3,18 +3,29 @@ name: ARMS export → process → Drive
 on:
   workflow_dispatch:
   schedule:
+    # Mondays 13:00 UTC; change as needed
     - cron: "0 13 * * 1"
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    outputs:
+      run_id: ${{ steps.capture_id.outputs.run_id }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - name: Install deps
-        run: pip install pandas playwright google-auth google-auth-oauthlib google-api-python-client
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: |
+          pip install "playwright==1.48.0" pandas \
+            google-auth google-auth-oauthlib google-api-python-client
+
+      - name: Install Playwright browsers (Chromium) + system deps
+        run: python -m playwright install --with-deps chromium
+
       - name: Run fetch_export
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -26,18 +37,20 @@ jobs:
 
       - name: Capture RUN_ID
         id: capture_id
-        run: echo "run_id=$(cat output/last_run_id.txt)" >> "$GITHUB_OUTPUT"
+        run: |
+          test -f output/last_run_id.txt
+          echo "run_id=$(cat output/last_run_id.txt)" >> "$GITHUB_OUTPUT"
 
-      - name: Upload output folder as artifact
+      - name: Upload raw artifact (export + manifest)
+        if: always()   # try to keep artifact even if later steps fail
         uses: actions/upload-artifact@v4
         with:
-          # 💡 artifact name matches the RUN_ID
           name: run-${{ steps.capture_id.outputs.run_id }}
-          path: output
+          path: |
+            output/raw/**
+            output/last_run_id.txt
           if-no-files-found: error
-
-    outputs:
-      run_id: ${{ steps.capture_id.outputs.run_id }}
+          retention-days: 7
 
   process_upload:
     needs: fetch
@@ -45,25 +58,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download output artifact from fetch
-        uses: actions/download-artifact@v4
-        with:
-          # must MATCH the name used above
-          name: run-${{ needs.fetch.outputs.run_id }}
-          path: .   # extracts to repo root; includes ./output/...
-
-      - name: Show what we got (debug)
-        run: |
-          echo "RUN_ID=${{ needs.fetch.outputs.run_id }}"
-          ls -R output || true
-          ls -R output/raw || true
-
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Install deps
+      - name: Install Python deps (no Playwright needed here)
         run: pip install pandas google-api-python-client google-auth
+
+      - name: Download raw artifact from fetch job
+        uses: actions/download-artifact@v4
+        with:
+          name: run-${{ needs.fetch.outputs.run_id }}
+          path: ./artifact
+
+      - name: Stage raw files where the script expects them
+        run: |
+          mkdir -p output/raw
+          cp -R ./artifact/* output/raw/
+          echo "${{ needs.fetch.outputs.run_id }}" > output/last_run_id.txt
+          echo "Staged files:"
+          find output -maxdepth 2 -type f -print
 
       - name: Process and upload to Drive
         env:
