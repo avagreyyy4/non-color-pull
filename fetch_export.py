@@ -772,7 +772,16 @@ async def login(page, url, username, password):
         except:
             pass
 
-    await page.wait_for_load_state("networkidle")
+    try:
+    await asyncio.wait_for(asyncio.wait([
+        page.wait_for_selector("a:has-text('Recruiting')", state="visible"),
+        page.wait_for_selector("text=Administration", state="visible"),
+        page.wait_for_selector("text=Exports", state="visible"),
+    ], return_when=asyncio.FIRST_COMPLETED), timeout=90)
+except Exception:
+    # Fallback so the flow can continue even if the above didn't resolve
+    await page.wait_for_load_state("domcontentloaded")
+
 
 async def run():
     cfg_path = Path(__file__).with_name("config.json")
