@@ -3,14 +3,14 @@ name: ARMS export → process → Drive
 on:
   workflow_dispatch:
   schedule:
-    # Mondays 13:00 UTC; change as needed
-    - cron: "0 13 * * 1"
+    - cron: "0 14 * * 1-5"  # 10:00 ET weekdays
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
     outputs:
       run_id: ${{ steps.capture_id.outputs.run_id }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -18,43 +18,39 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Python deps
+      - name: Install deps
         run: |
-          pip install "playwright==1.48.0" pandas \
-            google-auth google-auth-oauthlib google-api-python-client
-
-      - name: Install Playwright browsers (Chromium) + system deps
-        run: python -m playwright install --with-deps chromium
+          python -m pip install --upgrade pip
+          pip install pandas playwright google-api-python-client google-auth google-auth-oauthlib
+          python -m playwright install chromium
+          python -m playwright install-deps
 
       - name: Run fetch_export
         env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           ARMS_USERNAME: ${{ secrets.ARMS_USERNAME }}
           ARMS_PASS: ${{ secrets.ARMS_PASS }}
           ARMS_URL: ${{ secrets.ARMS_URL }}
+          HEADLESS: "true"
         run: python fetch_export.py
 
       - name: Capture RUN_ID
         id: capture_id
-        run: |
-          test -f output/last_run_id.txt
-          echo "run_id=$(cat output/last_run_id.txt)" >> "$GITHUB_OUTPUT"
+        run: echo "run_id=$(cat output/last_run_id.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Upload raw artifact (export + manifest)
-        if: always()   # try to keep artifact even if later steps fail
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: run-${{ steps.capture_id.outputs.run_id }}
           path: |
             output/raw/**
             output/last_run_id.txt
-          if-no-files-found: error
-          retention-days: 7
 
   process_upload:
     needs: fetch
     runs-on: ubuntu-latest
+    if: needs.fetch.outputs.run_id != ''
+
     steps:
       - uses: actions/checkout@v4
 
@@ -62,22 +58,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Python deps (no Playwright needed here)
-        run: pip install pandas google-api-python-client google-auth
-
-      - name: Download raw artifact from fetch job
-        uses: actions/download-artifact@v4
-        with:
-          name: run-${{ needs.fetch.outputs.run_id }}
-          path: ./artifact
-
-      - name: Stage raw files where the script expects them
+      - name: Install deps
         run: |
-          mkdir -p output/raw
-          cp -R ./artifact/* output/raw/
-          echo "${{ needs.fetch.outputs.run_id }}" > output/last_run_id.txt
-          echo "Staged files:"
-          find output -maxdepth 2 -type f -print
+          python -m pip install --upgrade pip
+          pip install pandas google-api-python-client google-auth
 
       - name: Process and upload to Drive
         env:
