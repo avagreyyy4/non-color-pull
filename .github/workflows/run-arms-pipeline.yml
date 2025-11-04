@@ -26,7 +26,7 @@ jobs:
 
       - name: Run fetch_export
         env:
-          # keep whatever fetch_export actually needs; SA is fine to keep here if your fetch uses it
+          # keep whatever fetch_export.py needs
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           ARMS_USERNAME: ${{ secrets.ARMS_USERNAME }}
@@ -44,6 +44,8 @@ jobs:
           name: run-${{ steps.capture.outputs.run_id }}
           path: |
             output/raw/**
+            output/run-*/raw/**
+            run-*/raw/**
             output/last_run_id.txt
 
   process_upload:
@@ -60,7 +62,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: run-${{ needs.fetch.outputs.run_id }}
-          path: .   # restores output/raw/* and output/last_run_id.txt into the workspace
+          path: .
+
+      - name: Debug tree (optional)
+        run: |
+          echo "Workspace after artifact download:"
+          ls -R
 
       - name: Install deps
         run: |
@@ -69,16 +76,12 @@ jobs:
 
       - name: Process and upload to Drive
         env:
-          
+          # OAuth secrets — uploads AS YOU (My Drive quota)
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
           GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-
-          
+          # Target folder in your Drive
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
-
-        
+          # Hand the discovered run id to the script
           RUN_ID: ${{ needs.fetch.outputs.run_id }}
-
-          
         run: python process_and_upload.py
