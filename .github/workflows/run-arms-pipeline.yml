@@ -3,7 +3,7 @@ name: ARMS export → process → Drive
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 14 * * 1-5"  # 10:00 ET weekdays
+    - cron: "0 09 * * 2"  # 10:00 ET weekdays
 
 jobs:
   fetch:
