@@ -112,33 +112,55 @@ def _discover_run_id() -> str:
     raise RuntimeError("Cannot determine RUN_ID. Provide RUN_ID env or ensure output/last_run_id.txt exists.")
 
 def _find_raw_csv(run_id: str) -> Path:
-    # 1) try manifest for this run_id
-    mani = Path(f"output/raw/manifest_{run_id}.json")
-    if mani.exists():
-        try:
-            p = Path(json.loads(mani.read_text()).get("saved_csv", ""))
-            if p.exists():
-                return p
-        except Exception:
-            pass
+    """
+    Search multiple layouts for the CSV:
+      1) output/run-<run_id>/raw/
+      2) output/raw/
+      3) run-<run_id>/raw/
+      4) raw/
+    """
+    bases = [
+        Path(f"output/run-{run_id}/raw"),
+        Path("output/raw"),
+        Path(f"run-{run_id}/raw"),
+        Path("raw"),
+    ]
+    for base in bases:
+        if not base.exists():
+            continue
 
-    # 2) try canonical filename pattern
-    p = Path(f"output/raw/export_{run_id}.csv")
-    if p.exists():
-        return p
+        # 1) manifest
+        mani = base / f"manifest_{run_id}.json"
+        if mani.exists():
+            try:
+                saved = json.loads(mani.read_text()).get("saved_csv", "")
+                p = Path(saved)
+                if p.is_file():
+                    return p
+                if saved and (base / saved).is_file():
+                    return base / saved
+            except Exception:
+                pass
 
-    # 3) try any csv that contains the run_id
-    cands = sorted(Path("output/raw").glob(f"*{run_id}*.csv"), reverse=True)
-    if cands:
-        return cands[0]
+        # 2) canonical filename
+        p = base / f"export_{run_id}.csv"
+        if p.is_file():
+            return p
 
-    # 4) graceful fallback: newest CSV in output/raw
-    any_csvs = sorted(Path("output/raw").glob("*.csv"), key=lambda x: x.stat().st_mtime, reverse=True)
-    if any_csvs:
-        print(f"[warn] No exact match for run_id={run_id}; using newest CSV: {any_csvs[0].name}")
-        return any_csvs[0]
+        # 3) any csv containing run_id
+        cands = sorted(base.glob(f"*{run_id}*.csv"))
+        if cands:
+            return cands[0]
 
-    raise FileNotFoundError(f"No raw CSV found for run_id={run_id} and no CSVs exist in output/raw")
+        # 4) newest csv in this base
+        any_csvs = sorted(base.glob("*.csv"), key=lambda x: x.stat().st_mtime, reverse=True)
+        if any_csvs:
+            print(f"[warn] No exact match for run_id={run_id} in {base}; using newest: {any_csvs[0].name}")
+            return any_csvs[0]
+
+    raise FileNotFoundError(
+        f"No raw CSV found for run_id={run_id} in any of: " + ", ".join(str(b) for b in bases)
+    )
 
 
 def _normalize_str(x: Any) -> str:
