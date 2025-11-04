@@ -773,14 +773,14 @@ async def login(page, url, username, password):
             pass
 
     try:
-    await asyncio.wait_for(asyncio.wait([
-        page.wait_for_selector("a:has-text('Recruiting')", state="visible"),
-        page.wait_for_selector("text=Administration", state="visible"),
-        page.wait_for_selector("text=Exports", state="visible"),
-    ], return_when=asyncio.FIRST_COMPLETED), timeout=90)
-except Exception:
-    # Fallback so the flow can continue even if the above didn't resolve
-    await page.wait_for_load_state("domcontentloaded")
+        await asyncio.wait_for(asyncio.wait([
+            page.wait_for_selector("a:has-text('Recruiting')", state="visible"),
+            page.wait_for_selector("text=Administration", state="visible"),
+            page.wait_for_selector("text=Exports", state="visible"),
+        ], return_when=asyncio.FIRST_COMPLETED), timeout=90)
+    except Exception:
+        # Fallback so the flow can continue even if the above didn't resolve
+        await page.wait_for_load_state("domcontentloaded")
 
 
 async def run():
