@@ -10,6 +10,7 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 import random
+import json
 
 # ================== ENV / CREDS ==================
 def _req(name: str) -> str:
@@ -86,51 +87,103 @@ def _ensure_dir(p: Path):
     p.mkdir(parents=True, exist_ok=True)
 
 def _discover_run_id() -> str:
+    """Find RUN_ID from env, a last_run_id.txt, or the newest manifest in any supported layout."""
     rid = os.getenv("RUN_ID", "").strip()
     if rid:
         return rid
-    last = Path("output/last_run_id.txt")
-    if last.exists():
-        t = last.read_text().strip()
-        if t:
-            return t
-    # fallback to most recent manifest
-    manis = sorted(Path("output/raw").glob("manifest_*.json"), reverse=True)
-    if manis:
-        m = json.loads(manis[0].read_text())
-        return m.get("run_id") or manis[0].stem.replace("manifest_", "")
-    raise RuntimeError("Cannot determine RUN_ID. Provide RUN_ID env or ensure output/last_run_id.txt exists.")
 
-def _find_raw_csv(run_id: str) -> Path:
-    # 1) try manifest for this run_id
-    mani = Path(f"output/raw/manifest_{run_id}.json")
-    if mani.exists():
-        try:
-            p = Path(json.loads(mani.read_text()).get("saved_csv", ""))
-            if p.exists():
-                return p
-        except Exception:
-            pass
+    # 1) last_run_id.txt in output/ or any run-*/ folder
+    try:
+        return Path(_find_last_run_id_path()).read_text().strip()
+    except FileNotFoundError:
+        pass
 
-    # 2) try canonical filename pattern
-    p = Path(f"output/raw/export_{run_id}.csv")
-    if p.exists():
-        return p
-
-    # 3) try any csv that contains the run_id
-    cands = sorted(Path("output/raw").glob(f"*{run_id}*.csv"), reverse=True)
+    # 2) newest manifest in any of these bases
+    patterns = [
+        "output/run-*/raw/manifest_*.json",
+        "run-*/raw/manifest_*.json",
+        "output/raw/manifest_*.json",
+        "raw/manifest_*.json",
+    ]
+    cands = []
+    for pat in patterns:
+        cands.extend(Path(".").glob(pat))
     if cands:
-        return cands[0]
+        latest = max(cands, key=lambda p: p.stat().st_mtime)
+        try:
+            m = json.loads(latest.read_text())
+            return m.get("run_id") or latest.stem.replace("manifest_", "")
+        except Exception:
+            return latest.stem.replace("manifest_", "")
 
-    # 4) graceful fallback: newest CSV in output/raw
-    any_csvs = sorted(Path("output/raw").glob("*.csv"), key=lambda x: x.stat().st_mtime, reverse=True)
-    if any_csvs:
-        print(f"[warn] No exact match for run_id={run_id}; using newest CSV: {any_csvs[0].name}")
-        return any_csvs[0]
+    raise RuntimeError(
+        "Cannot determine RUN_ID. Set RUN_ID env var, provide output/last_run_id.txt, "
+        "or ensure a manifest_* exists under output/run-*/raw or run-*/raw."
+    )
+def _find_raw_csv(run_id: str) -> Path:
+    """
+    Find the raw CSV for a given run_id across multiple supported layouts.
 
-    raise FileNotFoundError(f"No raw CSV found for run_id={run_id} and no CSVs exist in output/raw")
+    Supported directories (first match wins):
+      1) output/run-<run_id>/raw/
+      2) output/raw/
+      3) run-<run_id>/raw/
+      4) raw/
+    """
+    # Search bases in priority order
+    bases = [
+        Path(f"output/run-{run_id}/raw"),
+        Path("output/raw"),
+        Path(f"run-{run_id}/raw"),
+        Path("raw"),
+    ]
 
+    # Try manifest, then canonical name, then any *run_id* csv, then newest csv in each base
+    for base in bases:
+        if not base.exists():
+            continue
 
+        # 1) manifest
+        mani = base / f"manifest_{run_id}.json"
+        if mani.exists():
+            try:
+                saved = json.loads(mani.read_text()).get("saved_csv", "")
+                p = Path(saved)
+                if p.is_file():
+                    return p
+                # If manifest only contains filename, assume it's relative to base
+                if saved and (base / saved).is_file():
+                    return base / saved
+            except Exception:
+                pass
+
+        # 2) canonical filename
+        p = base / f"export_{run_id}.csv"
+        if p.is_file():
+            return p
+
+        # 3) any csv containing the run_id
+        cands = sorted(base.glob(f"*{run_id}*.csv"))
+        if cands:
+            return cands[0]
+
+        # 4) newest CSV in this base
+        any_csvs = sorted(base.glob("*.csv"), key=lambda x: x.stat().st_mtime, reverse=True)
+        if any_csvs:
+            print(f"[warn] No exact match for run_id={run_id} in {base}; using newest: {any_csvs[0].name}")
+            return any_csvs[0]
+
+    raise FileNotFoundError(
+        f"No raw CSV found for run_id={run_id} in any of: " + ", ".join(str(b) for b in bases)
+    )
+
+def _find_last_run_id_path() -> Path:
+    candidates = [Path("output/last_run_id.txt")] + list(Path(".").glob("run-*/last_run_id.txt"))
+    for p in candidates:
+        if p.exists():
+            return p
+    raise FileNotFoundError("last_run_id.txt not found in output/ or run-*/")
+    
 def _normalize_str(x: Any) -> str:
     return str(x).strip()
 
