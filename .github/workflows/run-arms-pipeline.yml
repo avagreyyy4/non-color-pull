@@ -3,7 +3,7 @@ name: ARMS export → process → Drive
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 13 * * 1"   # Mondays 13:00 UTC
+    - cron: "0 13 * * 1"
 
 jobs:
   fetch:
@@ -14,10 +14,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install deps
-        run: |
-          pip install -U pip
-          pip install pandas playwright google-auth google-auth-oauthlib google-api-python-client
-          python -m playwright install --with-deps chromium
+        run: pip install pandas playwright google-auth google-auth-oauthlib google-api-python-client
       - name: Run fetch_export
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -26,15 +23,19 @@ jobs:
           ARMS_PASS: ${{ secrets.ARMS_PASS }}
           ARMS_URL: ${{ secrets.ARMS_URL }}
         run: python fetch_export.py
+
       - name: Capture RUN_ID
         id: capture_id
         run: echo "run_id=$(cat output/last_run_id.txt)" >> "$GITHUB_OUTPUT"
-      - name: Upload output as artifact (pass to next job)
+
+      - name: Upload output folder as artifact
         uses: actions/upload-artifact@v4
         with:
+          # 💡 artifact name matches the RUN_ID
           name: run-${{ steps.capture_id.outputs.run_id }}
-          path: output/**        # includes raw csv + manifests
+          path: output
           if-no-files-found: error
+
     outputs:
       run_id: ${{ steps.capture_id.outputs.run_id }}
 
@@ -44,18 +45,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download prior job artifact
+      - name: Download output artifact from fetch
         uses: actions/download-artifact@v4
         with:
+          # must MATCH the name used above
           name: run-${{ needs.fetch.outputs.run_id }}
-          path: .  # restore output/ into workspace root
+          path: .   # extracts to repo root; includes ./output/...
+
+      - name: Show what we got (debug)
+        run: |
+          echo "RUN_ID=${{ needs.fetch.outputs.run_id }}"
+          ls -R output || true
+          ls -R output/raw || true
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install deps
-        run: pip install -U pip && pip install pandas google-api-python-client google-auth
+        run: pip install pandas google-api-python-client google-auth
 
       - name: Process and upload to Drive
         env:

@@ -102,21 +102,34 @@ def _discover_run_id() -> str:
     raise RuntimeError("Cannot determine RUN_ID. Provide RUN_ID env or ensure output/last_run_id.txt exists.")
 
 def _find_raw_csv(run_id: str) -> Path:
-    # prefer manifest path
+    # 1) try manifest for this run_id
     mani = Path(f"output/raw/manifest_{run_id}.json")
     if mani.exists():
-        p = Path(json.loads(mani.read_text()).get("saved_csv", ""))
-        if p.exists():
-            return p
-    # canonical
+        try:
+            p = Path(json.loads(mani.read_text()).get("saved_csv", ""))
+            if p.exists():
+                return p
+        except Exception:
+            pass
+
+    # 2) try canonical filename pattern
     p = Path(f"output/raw/export_{run_id}.csv")
     if p.exists():
         return p
-    # looser search
-    cands = list(Path("output/raw").glob(f"*{run_id}*.csv"))
+
+    # 3) try any csv that contains the run_id
+    cands = sorted(Path("output/raw").glob(f"*{run_id}*.csv"), reverse=True)
     if cands:
         return cands[0]
-    raise FileNotFoundError(f"No raw CSV found for run_id={run_id}")
+
+    # 4) graceful fallback: newest CSV in output/raw
+    any_csvs = sorted(Path("output/raw").glob("*.csv"), key=lambda x: x.stat().st_mtime, reverse=True)
+    if any_csvs:
+        print(f"[warn] No exact match for run_id={run_id}; using newest CSV: {any_csvs[0].name}")
+        return any_csvs[0]
+
+    raise FileNotFoundError(f"No raw CSV found for run_id={run_id} and no CSVs exist in output/raw")
+
 
 def _normalize_str(x: Any) -> str:
     return str(x).strip()
