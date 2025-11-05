@@ -332,23 +332,26 @@ def main():
     out_dir = Path(f"output/processed/{run_id}")
     _ensure_dir(out_dir)
 
+    # 1) Load
     df = pd.read_csv(raw_csv, dtype=str, keep_default_na=False)
     df.columns = [c.strip() for c in df.columns]
 
+    # 2) Keep ONLY rows with a valid phone number (per FILTERS)
     df = apply_filters(df, FILTERS)
 
-    # --- build contact_distance & order by it (far -> never -> recent) ---
+    # 3) Build contact_distance & sort by desired priority (far -> never -> recent)
+    #    DISTANCE_ORDER is defined at module scope as ["far","never","recent"]
     df = add_contact_distance(df, last_contact_col="Last Contact")
     df = sort_by_contact_distance(df)
 
-    # --- keep top 50 after ordering ---
+    # 4) Keep top N after ordering
     df_top = df.head(TOP_N).reset_index(drop=True)
-    print(f"[info] rows total={len(df)}, top {TOP_N} kept by contact_distance priority")
+    print(f"[info] rows total (phones only)={len(df)}, top {TOP_N} kept by contact_distance priority {DISTANCE_ORDER}")
 
-    # Split to 30/10/10 using "Last Call With"
+    # 5) Split to 30/10/10 using "Last Call With"
     buckets = split_top50_into_tyler_ali_kizmahr(df_top, run_id)
 
-    # Save locally
+    # 6) Save locally
     top_csv   = out_dir / "top50.csv"
     ty_csv    = out_dir / "tyler.csv"
     ali_csv   = out_dir / "ali.csv"
@@ -369,7 +372,7 @@ def main():
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
-    # Upload to Drive (date folder / run subfolder)
+    # 7) Upload to Drive (date folder / run subfolder)
     drive = drive_client()
     date_folder = date_folder_from_run_id(run_id)
     parent = drive_create_subfolder(drive, DRIVE_FOLDER_ID, date_folder)
@@ -379,8 +382,8 @@ def main():
         fid = drive_upload_csv(drive, rid_folder, p)
         print(f"[drive] uploaded {p.name} → id {fid}")
 
-
     print("[done] process & upload complete.")
+
 
 if __name__ == "__main__":
     main()
