@@ -209,7 +209,7 @@ import re
 import random
 
 TYLER_CAP = 30
-ALI_CAP   = 10
+ALLIE_CAP   = 10
 KIZ_CAP   = 10
 
 def _find_last_call_col(df: pd.DataFrame) -> Optional[str]:
@@ -228,30 +228,30 @@ def _name_hits(s: str, pattern: str) -> bool:
         return False
     return re.search(pattern, s, flags=re.I) is not None
 
-def split_top50_into_tyler_ali_kizmahr(df50: pd.DataFrame, run_id: str) -> Dict[str, pd.DataFrame]:
+def split_top50_into_tyler_allie_kizmahr(df50: pd.DataFrame, run_id: str) -> Dict[str, pd.DataFrame]:
     """
-    Returns dict with keys: 'tyler','ali','kizmahr' (DataFrames).
-    Caps: tyler=30, ali=10, kizmahr=10. Uses RUN_ID for deterministic fill.
+    Returns dict with keys: 'tyler','allie','kizmahr' (DataFrames).
+    Caps: tyler=30, allie=10, kizmahr=10. Uses RUN_ID for deterministic fill.
     """
     col = _find_last_call_col(df50)
     if col is None:
         # No column → everything goes to leftovers to be round-robined by caps
         leftovers_idx = list(df50.index)
-        tyler_idx, ali_idx, kiz_idx = [], [], []
+        tyler_idx, allie_idx, kiz_idx = [], [], []
     else:
         # Pre-candidate pools (indices)
         tyler_idx = [i for i, v in df50[col].items()
                      if _name_hits(v, r"(meg|tyler|alex|cy)")]
-        ali_idx   = [i for i, v in df50[col].items()
-                     if _name_hits(v, r"ali")]
+        allie_idx   = [i for i, v in df50[col].items()
+                     if _name_hits(v, r"(allie|alexandra)")]
         kiz_idx   = [i for i, v in df50[col].items()
                      if _name_hits(v, r"kizmahr")]
 
-        # If any overlap (rare), prefer tyler-group > ali > kiz
-        ali_idx   = [i for i in ali_idx if i not in tyler_idx]
-        kiz_idx   = [i for i in kiz_idx if i not in tyler_idx and i not in ali_idx]
+        # If any overlap (rare), prefer tyler-group > allie > kiz
+        allie_idx   = [i for i in allie_idx if i not in tyler_idx]
+        kiz_idx   = [i for i in kiz_idx if i not in tyler_idx and i not in allie_idx]
 
-        matched = set(tyler_idx) | set(ali_idx) | set(kiz_idx)
+        matched = set(tyler_idx) | set(allie_idx) | set(kiz_idx)
         leftovers_idx = [i for i in df50.index if i not in matched]
 
     # Prioritize within tyler: meg > tyler > alex > cy
@@ -267,11 +267,11 @@ def split_top50_into_tyler_ali_kizmahr(df50: pd.DataFrame, run_id: str) -> Dict[
 
     tyler_idx_sorted = sorted(tyler_idx, key=tyler_priority)
     tyler_take = tyler_idx_sorted[:TYLER_CAP]
-    ali_take   = ali_idx[:ALI_CAP]
+    allie_take   = allie_idx[:ALLIE_CAP]
     kiz_take   = kiz_idx[:KIZ_CAP]
     
-    matched_all = set(tyler_idx) | set(ali_idx) | set(kiz_idx)
-    taken_all   = set(tyler_take) | set(ali_take) | set(kiz_take)
+    matched_all = set(tyler_idx) | set(allie_idx) | set(kiz_idx)
+    taken_all   = set(tyler_take) | set(allie_take) | set(kiz_take)
 
     # Base leftovers = everyone not matched (true leftovers)
     leftovers_idx = [i for i in df50.index if i not in matched_all]
@@ -282,7 +282,7 @@ def split_top50_into_tyler_ali_kizmahr(df50: pd.DataFrame, run_id: str) -> Dict[
 
     # Compute remaining capacity
     need_tyler = TYLER_CAP - len(tyler_take)
-    need_ali   = ALI_CAP   - len(ali_take)
+    need_allie   = ALLIE_CAP   - len(allie_take)
     need_kiz   = KIZ_CAP   - len(kiz_take)
 
     # Deterministic shuffle of leftovers based on RUN_ID
@@ -303,8 +303,8 @@ def split_top50_into_tyler_ali_kizmahr(df50: pd.DataFrame, run_id: str) -> Dict[
 
     if need_tyler > 0:
         tyler_take += take_from_leftovers(need_tyler)
-    if need_ali > 0:
-        ali_take   += take_from_leftovers(need_ali)
+    if need_allie > 0:
+        allie_take   += take_from_leftovers(need_allie)
     if need_kiz > 0:
         kiz_take   += take_from_leftovers(need_kiz)
 
@@ -312,7 +312,7 @@ def split_top50_into_tyler_ali_kizmahr(df50: pd.DataFrame, run_id: str) -> Dict[
     cols = list(df50.columns)
     out = {
         "tyler":   df50.loc[tyler_take, cols].reset_index(drop=True),
-        "ali":     df50.loc[ali_take,   cols].reset_index(drop=True),
+        "allie":     df50.loc[allie_take,   cols].reset_index(drop=True),
         "kizmahr": df50.loc[kiz_take,   cols].reset_index(drop=True),
     }
     return out
@@ -355,17 +355,17 @@ def main():
     print(f"[info] rows total (phones only)={len(df)}, top {TOP_N} kept by contact_distance priority {DISTANCE_ORDER}")
 
     # 5) Split to 30/10/10 using "Last Call With"
-    buckets = split_top50_into_tyler_ali_kizmahr(df_top, run_id)
+    buckets = split_top50_into_tyler_allie_kizmahr(df_top, run_id)
 
     # 6) Save locally
     top_csv   = out_dir / "top50.csv"
     ty_csv    = out_dir / "tyler.csv"
-    ali_csv   = out_dir / "ali.csv"
+    allie_csv   = out_dir / "allie.csv"
     kiz_csv   = out_dir / "kizmahr.csv"
 
     df_top.to_csv(top_csv, index=False)
     buckets["tyler"].to_csv(ty_csv, index=False)
-    buckets["ali"].to_csv(ali_csv, index=False)
+    buckets["allie"].to_csv(allie_csv, index=False)
     buckets["kizmahr"].to_csv(kiz_csv, index=False)
 
     manifest = {
@@ -373,7 +373,7 @@ def main():
         "source_csv": str(raw_csv),
         "top_n": TOP_N,
         "distance_order": DISTANCE_ORDER,
-        "outputs": [str(top_csv), str(ty_csv), str(ali_csv), str(kiz_csv)],
+        "outputs": [str(top_csv), str(ty_csv), str(allie_csv), str(kiz_csv)],
         "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
@@ -384,7 +384,7 @@ def main():
     parent = drive_create_subfolder(drive, DRIVE_FOLDER_ID, date_folder)
     rid_folder = drive_create_subfolder(drive, parent, f"run_{run_id}")
 
-    for p in [top_csv, ty_csv, ali_csv, kiz_csv]:
+    for p in [top_csv, ty_csv, allie_csv, kiz_csv]:
         fid = drive_upload_csv(drive, rid_folder, p)
         print(f"[drive] uploaded {p.name} → id {fid}")
 
