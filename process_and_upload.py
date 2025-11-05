@@ -60,35 +60,39 @@ TOP_N = 50  # keep this many
 DISTANCE_ORDER = ["far", "never", "recent"]  # priority order
 
 def add_contact_distance(df: pd.DataFrame, last_contact_col: str = "Last Contact") -> pd.DataFrame:
-    """
-    Build contact_distance from Last Contact:
-      - NA/empty => 'never'
-      - > 365 days ago => 'far'
-      - within last 365 days => 'recent'
-    """
     df = df.copy()
-    # parse dates; tolerate blanks & weird formats
     lc = pd.to_datetime(df[last_contact_col].replace({"": None}), errors="coerce", utc=True)
 
-    today = pd.Timestamp.utcnow().normalize()
+    today = pd.Timestamp.now(tz="UTC").normalize()
     one_year_ago = today - pd.Timedelta(days=365)
 
-    # classify
-    cond_never = lc.isna()
-    cond_recent = lc >= one_year_ago
-    # anything else is "far"
+    cond_never  = lc.isna()
+    cond_recent = lc >= one_year_ago  # last 365 days
 
     dist = pd.Series("far", index=df.index)
     dist[cond_never] = "never"
     dist[cond_recent & ~cond_never] = "recent"
 
+    df["last_contact_dt"]  = lc
     df["contact_distance"] = dist
     return df
 
 def sort_by_contact_distance(df: pd.DataFrame) -> pd.DataFrame:
-    order_map = {k: i for i, k in enumerate(DISTANCE_ORDER)}  # far=0, never=1, recent=2
-    key = df["contact_distance"].map(order_map).fillna(9999)
-    return df.assign(_dist_rank=key).sort_values("_dist_rank", kind="stable").drop(columns="_dist_rank")
+    order_map = {k: i for i, k in enumerate(DISTANCE_ORDER)}  # never=0, recent=1, far=2
+    today = pd.Timestamp.now(tz="UTC").normalize()
+
+    days_since = (today - df["last_contact_dt"]).dt.days
+    recent_sort = days_since.where(df["contact_distance"].eq("recent"), -1)
+
+    return (
+        df.assign(
+            _dist_rank=df["contact_distance"].map(order_map).fillna(9999),
+            _recent_sort=recent_sort.fillna(-1),
+        )
+        .sort_values(by=["_dist_rank", "_recent_sort"], ascending=[True, False], kind="stable")
+        .drop(columns=["_dist_rank", "_recent_sort"])
+    )
+    
 # ================== HELPERS ==================
 def _ensure_dir(p: Path):
     p.mkdir(parents=True, exist_ok=True)
