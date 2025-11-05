@@ -49,9 +49,7 @@ def drive_upload_csv(drive, folder_id: str, path: Path) -> str:
 # 1) Row-level filters: all conditions must pass.
 #    Supported ops: eq, ne, in, nin, contains, regex, notnull, null (case-insensitive on strings)
 FILTERS: Dict[str, Dict[str, Any]] = {
-    # examples — adjust to your columns
-    # "Grad Year": {"eq": "2027"},
-    # "ACS Rank":  {"in": ["High Priority", "Priority", "Potential/WatchMore"]},
+    "Mobile Phone": {"notnull": True}
 }
 
 # 2) Ranking → which rows are “top” (put best first). Edit to your needs.
