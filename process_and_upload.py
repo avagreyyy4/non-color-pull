@@ -332,9 +332,10 @@ def main():
     out_dir = Path(f"output/processed/{run_id}")
     _ensure_dir(out_dir)
 
-    # Load & light clean
     df = pd.read_csv(raw_csv, dtype=str, keep_default_na=False)
     df.columns = [c.strip() for c in df.columns]
+
+    df = apply_filters(df, FILTERS)
 
     # --- build contact_distance & order by it (far -> never -> recent) ---
     df = add_contact_distance(df, last_contact_col="Last Contact")
