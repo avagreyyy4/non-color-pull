@@ -73,15 +73,16 @@ def add_contact_distance(df: pd.DataFrame, last_contact_col: str = "Last Contact
     dist[cond_never] = "never"
     dist[cond_recent & ~cond_never] = "recent"
 
-    df["last_contact_dt"]  = lc
+    df["last_contact_dt"]  = lc              
     df["contact_distance"] = dist
     return df
 
 def sort_by_contact_distance(df: pd.DataFrame) -> pd.DataFrame:
-    order_map = {k: i for i, k in enumerate(DISTANCE_ORDER)}  # never=0, recent=1, far=2
+    order_map = {k: i for i, k in enumerate(DISTANCE_ORDER)}  # far=0, never=1, recent=2
     today = pd.Timestamp.now(tz="UTC").normalize()
 
     days_since = (today - df["last_contact_dt"]).dt.days
+
     recent_sort = days_since.where(df["contact_distance"].eq("recent"), -1)
 
     return (
@@ -92,6 +93,7 @@ def sort_by_contact_distance(df: pd.DataFrame) -> pd.DataFrame:
         .sort_values(by=["_dist_rank", "_recent_sort"], ascending=[True, False], kind="stable")
         .drop(columns=["_dist_rank", "_recent_sort"])
     )
+
     
 # ================== HELPERS ==================
 def _ensure_dir(p: Path):
