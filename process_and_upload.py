@@ -241,7 +241,7 @@ def split_top50_into_tyler_allie_kizmahr(df50: pd.DataFrame, run_id: str) -> Dic
     else:
         # Pre-candidate pools (indices)
         tyler_idx = [i for i, v in df50[col].items()
-                     if _name_hits(v, r"(meg|tyler|alex|cy)")]
+                     if _name_hits(v, r"(meg|tyler|grossman|cy)")]
         allie_idx   = [i for i, v in df50[col].items()
                      if _name_hits(v, r"(allie|alexandra)")]
         kiz_idx   = [i for i, v in df50[col].items()
