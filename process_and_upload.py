@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 # ================== PACKAGES ==================
-import os, json, re
+import os, json, re, random
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from datetime import timedelta
+
 import pandas as pd
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-import random
 from google.oauth2.credentials import Credentials as UserCreds
 
 # ================== ENV / CREDS ==================
@@ -25,7 +24,7 @@ SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 def drive_client():
     rtok = os.getenv("GDRIVE_REFRESH_TOKEN")
     if not rtok:
-        raise RuntimeError("Missing GDRIVE_REFRESH_TOKEN (add it as a GitHub Secret).")
+        raise RuntimeError("Missing GDRIVE_REFRESH_TOKEN.")
     creds = UserCreds(
         token=None,
         refresh_token=rtok,
@@ -37,135 +36,39 @@ def drive_client():
     return build("drive", "v3", credentials=creds)
 
 def drive_create_subfolder(drive, parent_id: str, name: str) -> str:
-    meta = {"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]}
-    return drive.files().create(body=meta, fields="id", supportsAllDrives=True).execute()["id"]
+    meta = {
+        "name": name,
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [parent_id],
+    }
+    return drive.files().create(
+        body=meta, fields="id", supportsAllDrives=True
+    ).execute()["id"]
 
 def drive_upload_csv(drive, folder_id: str, path: Path) -> str:
-    meta  = {"name": path.name, "parents": [folder_id]}
+    meta = {"name": path.name, "parents": [folder_id]}
     media = MediaFileUpload(str(path), mimetype="text/csv", resumable=False)
-    return drive.files().create(body=meta, media_body=media, fields="id", supportsAllDrives=True).execute()["id"]
-    
-# ================== CONFIG YOU EDIT ==================
-# 1) Row-level filters: all conditions must pass.
-#    Supported ops: eq, ne, in, nin, contains, regex, notnull, null (case-insensitive on strings)
+    return drive.files().create(
+        body=meta, media_body=media, fields="id", supportsAllDrives=True
+    ).execute()["id"]
+
+# ================== CONFIG ==================
 FILTERS: Dict[str, Dict[str, Any]] = {
-    "Mobile Phone": {"notnull": True}
+    "Mobile Phone": {"notnull": True},
+    # Optional:
+    # "texted_distance": {"ne": "recent"},
 }
 
-# 2) Ranking → which rows are “top” (put best first). Edit to your needs.
-#    If the column is categorical, provide desired order in ORDER_MAPS.
+TOP_N = 50
+DISTANCE_ORDER = ["far", "never", "recent"]
 
-TOP_N = 50  # keep this many
+TYLER_CAP = 30
+ALLIE_CAP = 10
+KIZ_CAP = 10
 
-DISTANCE_ORDER = ["far", "never", "recent"]  # priority order
-
-def add_contact_distance(df: pd.DataFrame, last_contact_col: str = "Last Contact") -> pd.DataFrame:
-    df = df.copy()
-    lc = pd.to_datetime(df[last_contact_col].replace({"": None}), errors="coerce", utc=True)
-
-    today = pd.Timestamp.now(tz="UTC").normalize()
-    one_year_ago = today - pd.Timedelta(days=365)
-
-    cond_never  = lc.isna()
-    cond_recent = lc >= one_year_ago  # last 365 days
-
-    dist = pd.Series("far", index=df.index)
-    dist[cond_never] = "never"
-    dist[cond_recent & ~cond_never] = "recent"
-
-    df["last_contact_dt"]  = lc              
-    df["contact_distance"] = dist
-    return df
-
-def sort_by_contact_distance(df: pd.DataFrame) -> pd.DataFrame:
-    order_map = {k: i for i, k in enumerate(DISTANCE_ORDER)}  # far=0, never=1, recent=2
-    today = pd.Timestamp.now(tz="UTC").normalize()
-
-    days_since = (today - df["last_contact_dt"]).dt.days
-
-    recent_sort = days_since.where(df["contact_distance"].eq("recent"), -1)
-
-    return (
-        df.assign(
-            _dist_rank=df["contact_distance"].map(order_map).fillna(9999),
-            _recent_sort=recent_sort.fillna(-1),
-        )
-        .sort_values(by=["_dist_rank", "_recent_sort"], ascending=[True, False], kind="stable")
-        .drop(columns=["_dist_rank", "_recent_sort"])
-    )
-
-    
 # ================== HELPERS ==================
 def _ensure_dir(p: Path):
     p.mkdir(parents=True, exist_ok=True)
-
-def _discover_run_id() -> str:
-    rid = os.getenv("RUN_ID", "").strip()
-    if rid:
-        return rid
-    last = Path("output/last_run_id.txt")
-    if last.exists():
-        t = last.read_text().strip()
-        if t:
-            return t
-    # fallback to most recent manifest
-    manis = sorted(Path("output/raw").glob("manifest_*.json"), reverse=True)
-    if manis:
-        m = json.loads(manis[0].read_text())
-        return m.get("run_id") or manis[0].stem.replace("manifest_", "")
-    raise RuntimeError("Cannot determine RUN_ID. Provide RUN_ID env or ensure output/last_run_id.txt exists.")
-
-def _find_raw_csv(run_id: str) -> Path:
-    """
-    Search multiple layouts for the CSV:
-      1) output/run-<run_id>/raw/
-      2) output/raw/
-      3) run-<run_id>/raw/
-      4) raw/
-    """
-    bases = [
-        Path(f"output/run-{run_id}/raw"),
-        Path("output/raw"),
-        Path(f"run-{run_id}/raw"),
-        Path("raw"),
-    ]
-    for base in bases:
-        if not base.exists():
-            continue
-
-        # 1) manifest
-        mani = base / f"manifest_{run_id}.json"
-        if mani.exists():
-            try:
-                saved = json.loads(mani.read_text()).get("saved_csv", "")
-                p = Path(saved)
-                if p.is_file():
-                    return p
-                if saved and (base / saved).is_file():
-                    return base / saved
-            except Exception:
-                pass
-
-        # 2) canonical filename
-        p = base / f"export_{run_id}.csv"
-        if p.is_file():
-            return p
-
-        # 3) any csv containing run_id
-        cands = sorted(base.glob(f"*{run_id}*.csv"))
-        if cands:
-            return cands[0]
-
-        # 4) newest csv in this base
-        any_csvs = sorted(base.glob("*.csv"), key=lambda x: x.stat().st_mtime, reverse=True)
-        if any_csvs:
-            print(f"[warn] No exact match for run_id={run_id} in {base}; using newest: {any_csvs[0].name}")
-            return any_csvs[0]
-
-    raise FileNotFoundError(
-        f"No raw CSV found for run_id={run_id} in any of: " + ", ".join(str(b) for b in bases)
-    )
-
 
 def _normalize_str(x: Any) -> str:
     return str(x).strip()
@@ -173,223 +76,187 @@ def _normalize_str(x: Any) -> str:
 def apply_filters(df: pd.DataFrame, rules: Dict[str, Dict[str, Any]]) -> pd.DataFrame:
     if not rules:
         return df
-    m = pd.Series([True] * len(df), index=df.index)
+    m = pd.Series(True, index=df.index)
     for col, cond in rules.items():
         if col not in df.columns:
-            # missing column: treat as all False for that condition
             m &= False
             continue
         s = df[col].astype(str).fillna("").map(_normalize_str)
         for op, val in cond.items():
             op = op.lower()
             if op == "eq":
-                m &= (s.str.lower() == str(val).strip().lower())
+                m &= s.str.lower() == str(val).lower()
             elif op == "ne":
-                m &= (s.str.lower() != str(val).strip().lower())
-            elif op == "in":
-                vals = [str(v).strip().lower() for v in (val if isinstance(val, list) else [val])]
-                m &= s.str.lower().isin(vals)
-            elif op == "nin":
-                vals = [str(v).strip().lower() for v in (val if isinstance(val, list) else [val])]
-                m &= ~s.str.lower().isin(vals)
+                m &= s.str.lower() != str(val).lower()
             elif op == "contains":
                 m &= s.str.contains(str(val), case=False, na=False)
-            elif op == "regex":
-                m &= s.str.contains(val, flags=re.I, regex=True, na=False)
             elif op == "notnull":
                 m &= s.str.len() > 0
             elif op == "null":
                 m &= s.str.len() == 0
             else:
-                raise ValueError(f"Unsupported filter op: {op} for column {col}")
+                raise ValueError(f"Unsupported filter op: {op}")
     return df[m]
 
+# ================== RECENCY LOGIC ==================
+def add_recency_bucket(
+    df: pd.DataFrame,
+    date_col: str,
+    prefix: str,
+    recent_days: int = 365,
+) -> pd.DataFrame:
+    df = df.copy()
+    dt = pd.to_datetime(df[date_col].replace({"": None}), errors="coerce", utc=True)
 
-import re
-import random
+    today = pd.Timestamp.now(tz="UTC").normalize()
+    cutoff = today - pd.Timedelta(days=recent_days)
 
-TYLER_CAP = 30
-ALLIE_CAP   = 10
-KIZ_CAP   = 10
+    dist = pd.Series("far", index=df.index)
+    dist[dt.isna()] = "never"
+    dist[dt >= cutoff] = "recent"
 
+    df[f"{prefix}_dt"] = dt
+    df[f"{prefix}_distance"] = dist
+    return df
+
+def sort_by_contact_and_texted(df: pd.DataFrame) -> pd.DataFrame:
+    order = {k: i for i, k in enumerate(DISTANCE_ORDER)}
+    today = pd.Timestamp.now(tz="UTC").normalize()
+
+    return (
+        df.assign(
+            _contact_rank=df["contact_distance"].map(order).fillna(999),
+            _texted_rank=df["texted_distance"].map(order).fillna(999),
+            _contact_days=(today - df["contact_dt"]).dt.days.fillna(9999),
+            _texted_days=(today - df["texted_dt"]).dt.days.fillna(9999),
+        )
+        .sort_values(
+            by=[
+                "_contact_rank",
+                "_texted_rank",
+                "_contact_days",
+                "_texted_days",
+            ],
+            ascending=[True, True, False, False],
+            kind="stable",
+        )
+        .drop(
+            columns=[
+                "_contact_rank",
+                "_texted_rank",
+                "_contact_days",
+                "_texted_days",
+            ]
+        )
+    )
+
+# ================== SPLITTING ==================
 def _find_last_call_col(df: pd.DataFrame) -> Optional[str]:
-    candidates = ["Last Call With", "last_call_with", "LastCallWith", "Last Call", "last_call"]
-    for c in candidates:
-        if c in df.columns:
-            return c
-    # fuzzy fallback
     for c in df.columns:
         if re.fullmatch(r"\s*last\s*call.*", c, flags=re.I):
             return c
     return None
 
 def _name_hits(s: str, pattern: str) -> bool:
-    if not isinstance(s, str):
-        return False
-    return re.search(pattern, s, flags=re.I) is not None
+    return isinstance(s, str) and re.search(pattern, s, flags=re.I)
 
-def split_top50_into_tyler_allie_kizmahr(df50: pd.DataFrame, run_id: str) -> Dict[str, pd.DataFrame]:
-    """
-    Returns dict with keys: 'tyler','allie','kizmahr' (DataFrames).
-    Caps: tyler=30, allie=10, kizmahr=10. Uses RUN_ID for deterministic fill.
-    """
+def split_top50_into_tyler_allie_kizmahr(df50: pd.DataFrame, run_id: str):
     col = _find_last_call_col(df50)
-    if col is None:
-        # No column → everything goes to leftovers to be round-robined by caps
-        leftovers_idx = list(df50.index)
-        tyler_idx, allie_idx, kiz_idx = [], [], []
-    else:
-        # Pre-candidate pools (indices)
-        tyler_idx = [i for i, v in df50[col].items()
-                     if _name_hits(v, r"(meg|tyler|grossman|cy)")]
-        allie_idx   = [i for i, v in df50[col].items()
-                     if _name_hits(v, r"(allie|alexandra)")]
-        kiz_idx   = [i for i, v in df50[col].items()
-                     if _name_hits(v, r"kizmahr")]
+    idx = list(df50.index)
 
-        # If any overlap (rare), prefer tyler-group > allie > kiz
-        allie_idx   = [i for i in allie_idx if i not in tyler_idx]
-        kiz_idx   = [i for i in kiz_idx if i not in tyler_idx and i not in allie_idx]
+    tyler, allie, kiz = [], [], []
 
-        matched = set(tyler_idx) | set(allie_idx) | set(kiz_idx)
-        leftovers_idx = [i for i in df50.index if i not in matched]
+    if col:
+        for i in idx:
+            v = df50.at[i, col]
+            if _name_hits(v, r"(meg|tyler|grossman|cy)"):
+                tyler.append(i)
+            elif _name_hits(v, r"(allie|alexandra)"):
+                allie.append(i)
+            elif _name_hits(v, r"kizmahr"):
+                kiz.append(i)
 
-    # Prioritize within tyler: meg > tyler > alex > cy
-    def tyler_priority(i: int) -> int:
-        if col is None:
-            return 999
-        v = str(df50.at[i, col])
-        if _name_hits(v, r"\btyler"): return 0
-        if _name_hits(v, r"\bmeg"):   return 1
-        if _name_hits(v, r"\balex"):  return 2
-        if _name_hits(v, r"\bcy"):    return 3
-        return 9
+    used = set(tyler + allie + kiz)
+    leftovers = [i for i in idx if i not in used]
 
-    tyler_idx_sorted = sorted(tyler_idx, key=tyler_priority)
-    tyler_take = tyler_idx_sorted[:TYLER_CAP]
-    allie_take   = allie_idx[:ALLIE_CAP]
-    kiz_take   = kiz_idx[:KIZ_CAP]
-    
-    matched_all = set(tyler_idx) | set(allie_idx) | set(kiz_idx)
-    taken_all   = set(tyler_take) | set(allie_take) | set(kiz_take)
+    def cap(xs, n): return xs[:n]
 
-    # Base leftovers = everyone not matched (true leftovers)
-    leftovers_idx = [i for i in df50.index if i not in matched_all]
+    tyler = cap(tyler, TYLER_CAP)
+    allie = cap(allie, ALLIE_CAP)
+    kiz = cap(kiz, KIZ_CAP)
 
-    # Plus the overflow from matched groups that didn't fit in caps
-    overflow = [i for i in matched_all if i not in taken_all]
-    leftovers_idx.extend(overflow)
-
-    # Compute remaining capacity
-    need_tyler = TYLER_CAP - len(tyler_take)
-    need_allie   = ALLIE_CAP   - len(allie_take)
-    need_kiz   = KIZ_CAP   - len(kiz_take)
-
-    # Deterministic shuffle of leftovers based on RUN_ID
-    seed = 0
-    try:
-        seed = int(re.sub(r"\D", "", run_id)[:9] or "0")
-    except Exception:
-        pass
+    seed = int(re.sub(r"\D", "", run_id)[:8] or "0")
     rng = random.Random(seed)
-    leftovers_shuffled = leftovers_idx[:]
-    rng.shuffle(leftovers_shuffled)
+    rng.shuffle(leftovers)
 
-    # Fill remaining capacities with leftovers in order
-    def take_from_leftovers(n: int) -> List[int]:
-        taken = leftovers_shuffled[:n]
-        del leftovers_shuffled[:n]
-        return taken
+    def fill(xs, cap):
+        need = cap - len(xs)
+        take = leftovers[:need]
+        del leftovers[:need]
+        return xs + take
 
-    if need_tyler > 0:
-        tyler_take += take_from_leftovers(need_tyler)
-    if need_allie > 0:
-        allie_take   += take_from_leftovers(need_allie)
-    if need_kiz > 0:
-        kiz_take   += take_from_leftovers(need_kiz)
+    tyler = fill(tyler, TYLER_CAP)
+    allie = fill(allie, ALLIE_CAP)
+    kiz = fill(kiz, KIZ_CAP)
 
-    # Build DFs (preserve column order)
-    cols = list(df50.columns)
-    out = {
-        "tyler":   df50.loc[tyler_take, cols].reset_index(drop=True),
-        "allie":     df50.loc[allie_take,   cols].reset_index(drop=True),
-        "kizmahr": df50.loc[kiz_take,   cols].reset_index(drop=True),
+    return {
+        "tyler": df50.loc[tyler].reset_index(drop=True),
+        "allie": df50.loc[allie].reset_index(drop=True),
+        "kizmahr": df50.loc[kiz].reset_index(drop=True),
     }
-    return out
-
-
-
-def date_folder_from_run_id(run_id: str) -> str:
-    # RUN_ID like YYYYMMDD_HHMMSS -> turn into YYYY-MM-DD
-    try:
-        d = datetime.strptime(run_id.split("_")[0], "%Y%m%d").date()
-        return d.isoformat()
-    except Exception:
-        return datetime.utcnow().date().isoformat()
 
 # ================== MAIN ==================
 def main():
-    run_id = _discover_run_id()
-    raw_csv = _find_raw_csv(run_id)
-    print(f"[info] RUN_ID={run_id}")
-    print(f"[info] raw CSV: {raw_csv}")
+    run_id = os.getenv("RUN_ID")
+    if not run_id:
+        raise RuntimeError("RUN_ID not set")
 
-    # Output dirs
+    raw_csv = Path(f"output/raw/export_{run_id}.csv")
+    if not raw_csv.exists():
+        raise FileNotFoundError(raw_csv)
+
     out_dir = Path(f"output/processed/{run_id}")
     _ensure_dir(out_dir)
 
-    # 1) Load
     df = pd.read_csv(raw_csv, dtype=str, keep_default_na=False)
     df.columns = [c.strip() for c in df.columns]
 
-    # 2) Keep ONLY rows with a valid phone number (per FILTERS)
+    # Filters
     df = apply_filters(df, FILTERS)
 
-    # 3) Build contact_distance & sort by desired priority (far -> never -> recent)
-    #    DISTANCE_ORDER is defined at module scope as ["far","never","recent"]
-    df = add_contact_distance(df, last_contact_col="Last Contact")
-    df = sort_by_contact_distance(df)
+    # Add recency logic
+    df = add_recency_bucket(df, "Last Contact", prefix="contact")
+    df = add_recency_bucket(df, "Last Texted", prefix="texted")
 
-    # 4) Keep top N after ordering
+    # Sort + top N
+    df = sort_by_contact_and_texted(df)
     df_top = df.head(TOP_N).reset_index(drop=True)
-    print(f"[info] rows total (phones only)={len(df)}, top {TOP_N} kept by contact_distance priority {DISTANCE_ORDER}")
 
-    # 5) Split to 30/10/10 using "Last Call With"
+    # Split
     buckets = split_top50_into_tyler_allie_kizmahr(df_top, run_id)
 
-    # 6) Save locally
-    top_csv   = out_dir / "top50.csv"
-    ty_csv    = out_dir / "tyler.csv"
-    allie_csv   = out_dir / "allie.csv"
-    kiz_csv   = out_dir / "kizmahr.csv"
-
-    df_top.to_csv(top_csv, index=False)
-    buckets["tyler"].to_csv(ty_csv, index=False)
-    buckets["allie"].to_csv(allie_csv, index=False)
-    buckets["kizmahr"].to_csv(kiz_csv, index=False)
-
-    manifest = {
-        "run_id": run_id,
-        "source_csv": str(raw_csv),
-        "top_n": TOP_N,
-        "distance_order": DISTANCE_ORDER,
-        "outputs": [str(top_csv), str(ty_csv), str(allie_csv), str(kiz_csv)],
-        "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    # Save
+    paths = {
+        "top50": out_dir / "top50.csv",
+        "tyler": out_dir / "tyler.csv",
+        "allie": out_dir / "allie.csv",
+        "kizmahr": out_dir / "kizmahr.csv",
     }
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
-    # 7) Upload to Drive (date folder / run subfolder)
+    df_top.to_csv(paths["top50"], index=False)
+    for k in ["tyler", "allie", "kizmahr"]:
+        buckets[k].to_csv(paths[k], index=False)
+
+    # Upload
     drive = drive_client()
-    date_folder = date_folder_from_run_id(run_id)
+    date_folder = datetime.utcnow().date().isoformat()
     parent = drive_create_subfolder(drive, DRIVE_FOLDER_ID, date_folder)
     rid_folder = drive_create_subfolder(drive, parent, f"run_{run_id}")
 
-    for p in [top_csv, ty_csv, allie_csv, kiz_csv]:
-        fid = drive_upload_csv(drive, rid_folder, p)
-        print(f"[drive] uploaded {p.name} → id {fid}")
+    for p in paths.values():
+        drive_upload_csv(drive, rid_folder, p)
 
     print("[done] process & upload complete.")
-
 
 if __name__ == "__main__":
     main()
