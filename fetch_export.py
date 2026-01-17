@@ -118,7 +118,7 @@ async def click_recruiting_recruits(page):
     else:
         raise RuntimeError("Could not click ‘Recruits’ in the flyout.")
 
-    await page.wait_for_load_state("networkidle")
+    await page.wait_for_load_state("load")
 
 async def _expand_section(scope, title_regex):
     try:
@@ -127,7 +127,7 @@ async def _expand_section(scope, title_regex):
         expanded = await hdr.get_attribute("aria-expanded")
         if expanded is not None and expanded.lower() == "false":
             await hdr.click()
-            await scope.wait_for_load_state("networkidle")
+            await scope.wait_for_load_state("load")
             await asyncio.sleep(0.1)
             return
     except:
@@ -297,7 +297,7 @@ async def open_right_kebab_and_click_export(page):
                 if await el.count() and await el.is_visible():
                     await el.scroll_into_view_if_needed()
                     await el.click(timeout=1500)
-                    await page.wait_for_load_state("networkidle")
+                    await page.wait_for_load_state("load")
                     return True
             except:
                 continue
@@ -379,7 +379,7 @@ async def open_export_and_start_job(layout_text: str, page):
             await btn.scroll_into_view_if_needed()
             await page.wait_for_timeout(200)
             await btn.click(timeout=5000)
-            await page.wait_for_load_state("networkidle")
+            await page.wait_for_load_state("load")
             await asyncio.sleep(0.5)
             return
         except:
@@ -398,7 +398,7 @@ async def maybe_go_to_exports_prompt(page):
     ]:
         try:
             await finder().click(timeout=2000)
-            await page.wait_for_load_state("networkidle")
+            await page.wait_for_load_state("load")
             await asyncio.sleep(0.3)
             return True
         except:
@@ -414,7 +414,7 @@ async def disable_auto_refresh_if_present(page):
         pressed = await toggle.get_attribute("aria-pressed")
         if pressed is None or pressed.lower() == "true":
             await toggle.click(timeout=1500)
-            await page.wait_for_load_state("networkidle")
+            await page.wait_for_load_state("load")
             await asyncio.sleep(0.25)
     except:
         pass
@@ -430,7 +430,7 @@ async def fetch_latest_export_from_admin(page, layout_text: str, timeout_s: int 
         ]:
             try:
                 await step()
-                await page.wait_for_load_state("networkidle")
+                await page.wait_for_load_state("load")
                 break
             except:
                 pass
@@ -440,7 +440,7 @@ async def fetch_latest_export_from_admin(page, layout_text: str, timeout_s: int 
         ]:
             try:
                 await step()
-                await page.wait_for_load_state("networkidle")
+                await page.wait_for_load_state("load")
                 break
             except:
                 pass
@@ -452,9 +452,9 @@ async def fetch_latest_export_from_admin(page, layout_text: str, timeout_s: int 
             has=page.get_by_text(re.compile(r"^\s*Submit\s*Date\s*$", re.I))
         ).first
         await submit_hdr.click(timeout=1500)
-        await page.wait_for_load_state("networkidle")
+        await page.wait_for_load_state("load")
         await submit_hdr.click(timeout=1500)
-        await page.wait_for_load_state("networkidle")
+        await page.wait_for_load_state("load")
     except:
         pass
 
@@ -540,7 +540,7 @@ async def start_export_from_admin(layout_text: str, page):
     ]:
         try:
             await step()
-            await page.wait_for_load_state("networkidle")
+            await page.wait_for_load_state("load")
             break
         except:
             pass
@@ -550,7 +550,7 @@ async def start_export_from_admin(layout_text: str, page):
     ]:
         try:
             await step()
-            await page.wait_for_load_state("networkidle")
+            await page.wait_for_load_state("load")
             break
         except:
             pass
@@ -583,7 +583,7 @@ async def start_export_from_admin(layout_text: str, page):
             export_btn = page.locator(sel).first
             await export_btn.wait_for(timeout=5000)
             await export_btn.click()
-            await page.wait_for_load_state("networkidle")
+            await page.wait_for_load_state("load")
             break
         except Exception:
             continue
@@ -635,7 +635,7 @@ async def start_export_from_admin(layout_text: str, page):
             await btn.scroll_into_view_if_needed()
             await page.wait_for_timeout(200)
             await btn.click(timeout=4000)
-            await page.wait_for_load_state("networkidle")
+            await page.wait_for_load_state("load")
             return
         except:
             continue
@@ -711,7 +711,7 @@ async def login(page, url, username, password):
         btn_next = page.get_by_role("button", name=_rx_exact("Next")).first
         if await btn_next.count():
             await btn_next.click()
-            await page.wait_for_load_state("networkidle")
+            await page.wait_for_load_state("load")
             await page.wait_for_timeout(800)
     except:
         pass
@@ -772,7 +772,7 @@ async def login(page, url, username, password):
         except:
             pass
 
-    await page.wait_for_load_state("networkidle")
+    await page.wait_for_load_state("load")
 
 async def run():
     cfg_path = Path(__file__).with_name("config.json")
