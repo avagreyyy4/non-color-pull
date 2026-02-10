@@ -219,7 +219,7 @@ def main():
     df = apply_filters(df, FILTERS)
 
     # Add recency logic
-    #df = add_recency_bucket(df, "Last Called", prefix="contact")
+    df = add_recency_bucket(df, "Last Called", prefix="contact")
 
     # Sort + top N
     df = sort_by_contact_and_texted(df)
