@@ -119,7 +119,7 @@ def add_recency_bucket(
     df[f"{prefix}_distance"] = dist
     return df
 
-def sort_by_contact_and_texted(df: pd.DataFrame) -> pd.DataFrame:
+def sort_by_call_distance(df: pd.DataFrame) -> pd.DataFrame:
     order = {k: i for i, k in enumerate(DISTANCE_ORDER)}
     today = pd.Timestamp.now(tz="UTC").normalize()
 
@@ -133,7 +133,7 @@ def sort_by_contact_and_texted(df: pd.DataFrame) -> pd.DataFrame:
                 "_contact_rank",
                 "_contact_days",
             ],
-            ascending=[True, True, False, False],
+            ascending=[True, False],
             kind="stable",
         )
         .drop(
@@ -222,7 +222,7 @@ def main():
     df = add_recency_bucket(df, "Last Called", prefix="contact")
 
     # Sort + top N
-    df = sort_by_contact_and_texted(df)
+    df = sort_by_call_distance(df)
     df_top = df.head(TOP_N).reset_index(drop=True)
 
     # Split
