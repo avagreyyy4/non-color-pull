@@ -126,16 +126,12 @@ def sort_by_contact_and_texted(df: pd.DataFrame) -> pd.DataFrame:
     return (
         df.assign(
             _contact_rank=df["contact_distance"].map(order).fillna(999),
-            _texted_rank=df["texted_distance"].map(order).fillna(999),
             _contact_days=(today - df["contact_dt"]).dt.days.fillna(9999),
-            _texted_days=(today - df["texted_dt"]).dt.days.fillna(9999),
         )
         .sort_values(
             by=[
                 "_contact_rank",
-                "_texted_rank",
                 "_contact_days",
-                "_texted_days",
             ],
             ascending=[True, True, False, False],
             kind="stable",
@@ -143,9 +139,7 @@ def sort_by_contact_and_texted(df: pd.DataFrame) -> pd.DataFrame:
         .drop(
             columns=[
                 "_contact_rank",
-                "_texted_rank",
                 "_contact_days",
-                "_texted_days",
             ]
         )
     )
@@ -225,7 +219,7 @@ def main():
     df = apply_filters(df, FILTERS)
 
     # Add recency logic
-    #df = add_recency_bucket(df, "Last Texted", prefix="texted")
+    #df = add_recency_bucket(df, "Last Called", prefix="contact")
 
     # Sort + top N
     df = sort_by_contact_and_texted(df)
